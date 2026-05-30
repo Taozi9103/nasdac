@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import math
@@ -74,7 +73,7 @@ def daily_check(context):
         rebalance(context)
     else:
         days_passed = (context.current_dt - g.last_rebalance_date).days
-        if days_passed &gt;= g.rebalance_period:
+        if days_passed >= g.rebalance_period:
             rebalance(context)
 
 
@@ -85,13 +84,13 @@ def check_risk(context):
     current_value = context.portfolio.total_value
     
     # 更新组合历史最高净值
-    if current_value &gt; g.portfolio_high:
+    if current_value > g.portfolio_high:
         g.portfolio_high = current_value
     
     # 检查最大回撤
     drawdown = (g.portfolio_high - current_value) / g.portfolio_high
-    if drawdown &gt; g.max_drawdown_threshold:
-        log.info(f"触发最大回撤控制：当前回撤{drawdown*100:.2f}%，清仓")
+    if drawdown > g.max_drawdown_threshold:
+        log.info("触发最大回撤控制：当前回撤%.2f%%，清仓", drawdown * 100)
         for position in context.portfolio.positions.values():
             order_target(position.security, 0)
         return
@@ -100,11 +99,11 @@ def check_risk(context):
     for fund_code, position in context.portfolio.positions.items():
         if fund_code in g.entry_prices:
             entry_price = g.entry_prices[fund_code]
-            current_price = position.value / position.total_amount if position.total_amount &gt; 0 else 0
-            if current_price &gt; 0:
+            current_price = position.value / position.total_amount if position.total_amount > 0 else 0
+            if current_price > 0:
                 loss_ratio = (entry_price - current_price) / entry_price
-                if loss_ratio &gt; g.stop_loss_threshold:
-                    log.info(f"触发止损：{fund_code}，亏损{loss_ratio*100:.2f}%")
+                if loss_ratio > g.stop_loss_threshold:
+                    log.info("触发止损：%s，亏损%.2f%%", fund_code, loss_ratio * 100)
                     order_target(fund_code, 0)
 
 
@@ -177,11 +176,11 @@ def get_trend_signal(context, index_code):
     current_price = closes[-1]
     
     score = 0
-    if current_price &gt; ma_short:
+    if current_price > ma_short:
         score += 0.4
-    if ma_short &gt; ma_mid:
+    if ma_short > ma_mid:
         score += 0.3
-    if ma_mid &gt; ma_long:
+    if ma_mid > ma_long:
         score += 0.3
     
     return score * 2 - 1  # 归一化到 [-1, 1]
@@ -203,9 +202,9 @@ def get_momentum_signal(context, index_code):
     momentum = 0.4 * mom_5 + 0.35 * mom_20 + 0.25 * mom_60
     
     # 标准化
-    if momentum &gt; 0.08:
+    if momentum > 0.08:
         return 1.0
-    elif momentum &lt; -0.08:
+    elif momentum < -0.08:
         return -1.0
     else:
         return momentum / 0.08
@@ -225,12 +224,12 @@ def get_volatility_signal(context, index_code):
     vol_long = np.std(returns) * np.sqrt(252)
     
     # 波动率相对水平
-    vol_ratio = vol_short / vol_long if vol_long &gt; 0 else 1
+    vol_ratio = vol_short / vol_long if vol_long > 0 else 1
     
     # 低波动率看多，高波动率看空
-    if vol_short &lt; 0.12:
+    if vol_short < 0.12:
         return 1.0
-    elif vol_short &gt; 0.28:
+    elif vol_short > 0.28:
         return -1.0
     else:
         return (0.28 - vol_short) / 0.16
@@ -250,14 +249,14 @@ def get_volume_signal(context, index_code):
     # 成交量变化
     vol_current = volumes[-5:].mean()
     vol_past = volumes[-25:-5].mean()
-    vol_change = (vol_current - vol_past) / vol_past if vol_past &gt; 0 else 0
+    vol_change = (vol_current - vol_past) / vol_past if vol_past > 0 else 0
     
     # 量价配合判断
-    if price_change &gt; 0.02 and vol_change &gt; 0.1:
+    if price_change > 0.02 and vol_change > 0.1:
         return 1.0  # 放量上涨，看多
-    elif price_change &lt; -0.02 and vol_change &gt; 0.1:
+    elif price_change < -0.02 and vol_change > 0.1:
         return -1.0  # 放量下跌，看空
-    elif price_change &gt; 0:
+    elif price_change > 0:
         return 0.3
     else:
         return -0.3
@@ -267,9 +266,9 @@ def calculate_target_position(macro_signal):
     """
     根据宏观信号计算目标仓位
     """
-    if macro_signal &gt;= g.signal_threshold:
+    if macro_signal >= g.signal_threshold:
         return g.max_position_size
-    elif macro_signal &lt;= -g.signal_threshold:
+    elif macro_signal <= -g.signal_threshold:
         return 0.0
     else:
         position_ratio = (macro_signal + g.signal_threshold) / (2 * g.signal_threshold)
@@ -285,7 +284,7 @@ def select_funds(context):
     for fund_code in g.fund_pool:
         try:
             prices = get_bars(fund_code, count=61, unit='1d', fields=['close'], include_now=True)
-            if len(prices) &gt;= 61:
+            if len(prices) >= 61:
                 closes = prices['close']
                 
                 # 因子1：动量因子（过去20日）
@@ -321,7 +320,7 @@ def adjust_portfolio(context, selected_funds, target_position):
             order_target(position.security, 0)
     
     # 调整选中基金的仓位
-    if len(selected_funds) &gt; 0:
+    if len(selected_funds) > 0:
         fund_position = target_position / len(selected_funds)
         
         for fund_code in selected_funds:
@@ -329,16 +328,16 @@ def adjust_portfolio(context, selected_funds, target_position):
             current_position = 0
             if fund_code in context.portfolio.positions:
                 pos = context.portfolio.positions[fund_code]
-                current_position = pos.value / context.portfolio.total_value if context.portfolio.total_value &gt; 0 else 0
+                current_position = pos.value / context.portfolio.total_value if context.portfolio.total_value > 0 else 0
             
             # 如果目标仓位与当前差异较大，调仓
-            if abs(fund_position - current_position) &gt; 0.05:
+            if abs(fund_position - current_position) > 0.05:
                 order_target_percent(fund_code, fund_position)
                 
                 # 记录入场价格
-                if fund_position &gt; 0:
+                if fund_position > 0:
                     prices = get_bars(fund_code, count=1, unit='1d', fields=['close'], include_now=True)
-                    if len(prices) &gt; 0:
+                    if len(prices) > 0:
                         g.entry_prices[fund_code] = prices['close'][-1]
 
 
@@ -348,4 +347,3 @@ def handle_data(context, data):
 
 def after_trading_end(context):
     pass
-

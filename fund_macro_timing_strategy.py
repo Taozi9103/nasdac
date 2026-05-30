@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import math
@@ -26,13 +25,6 @@ def initialize(context):
     # 全局变量
     g.macro_indicators = {}
     g.last_rebalance_date = None
-    
-    # 常用宏观指数（示例，实际使用时可根据需要调整）
-    g.macro_indices = {
-        'bond_yield': '000001.XSHG',  # 10年期国债收益率（示例）
-        'credit_spread': '000016.XSHG',  # 信用利差（示例）
-        'liquidity': '000012.XSHG'  # 流动性指标（示例）
-    }
     
     # 基金池（宽基指数基金）
     g.fund_pool = [
@@ -62,7 +54,7 @@ def daily_check(context):
         rebalance(context)
     else:
         days_passed = (context.current_dt - g.last_rebalance_date).days
-        if days_passed &gt;= g.rebalance_period:
+        if days_passed >= g.rebalance_period:
             rebalance(context)
 
 
@@ -132,11 +124,11 @@ def get_trend_signal(context, index_code):
     # 趋势判断
     current_price = closes[-1]
     
-    if current_price &gt; ma_short and ma_short &gt; ma_long:
+    if current_price > ma_short and ma_short > ma_long:
         return 1.0  # 强势多头
-    elif current_price &gt; ma_short and ma_short &lt; ma_long:
+    elif current_price > ma_short and ma_short < ma_long:
         return 0.5  # 震荡偏多
-    elif current_price &lt; ma_short and ma_short &gt; ma_long:
+    elif current_price < ma_short and ma_short > ma_long:
         return -0.5  # 震荡偏空
     else:
         return -1.0  # 强势空头
@@ -156,9 +148,9 @@ def get_momentum_signal(context, index_code):
     
     # 标准化到 [-1, 1] 范围
     # 使用经验阈值：过去20日收益率在 [-5%, 5%] 之间线性映射
-    if momentum &gt; 0.05:
+    if momentum > 0.05:
         return 1.0
-    elif momentum &lt; -0.05:
+    elif momentum < -0.05:
         return -1.0
     else:
         return momentum / 0.05
@@ -181,9 +173,9 @@ def get_volatility_signal(context, index_code):
     
     # 波动率信号：低波动率看多，高波动率看空
     # 使用经验阈值：波动率在 [10%, 30%] 之间线性映射
-    if volatility &lt; 0.1:
+    if volatility < 0.1:
         return 1.0
-    elif volatility &gt; 0.3:
+    elif volatility > 0.3:
         return -1.0
     else:
         return (0.3 - volatility) / 0.2
@@ -194,9 +186,9 @@ def calculate_target_position(macro_signal):
     根据宏观信号计算目标仓位
     """
     # 信号从 [-1, 1] 映射到 [0, max_position_size]
-    if macro_signal &gt;= g.signal_threshold:
+    if macro_signal >= g.signal_threshold:
         return g.max_position_size
-    elif macro_signal &lt;= -g.signal_threshold:
+    elif macro_signal <= -g.signal_threshold:
         return 0.0
     else:
         # 线性插值
@@ -216,7 +208,7 @@ def select_funds(context):
             # 获取基金净值数据
             prices = get_bars(fund_code, count=g.lookback_period + 1, unit='1d', 
                               fields=['close'], include_now=True)
-            if len(prices) &gt;= g.lookback_period + 1:
+            if len(prices) >= g.lookback_period + 1:
                 closes = prices['close']
                 # 计算过去20日收益率
                 returns = (closes[-1] - closes[0]) / closes[0]
@@ -241,7 +233,7 @@ def adjust_portfolio(context, selected_funds, target_position):
             order_target(position.security, 0)
     
     # 2. 计算单只基金的目标仓位
-    if len(selected_funds) &gt; 0:
+    if len(selected_funds) > 0:
         fund_position = target_position / len(selected_funds)
         
         # 3. 买入选中的基金
@@ -261,4 +253,3 @@ def after_trading_end(context):
     交易结束后的处理
     """
     pass
-
