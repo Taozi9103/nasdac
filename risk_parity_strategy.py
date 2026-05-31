@@ -20,41 +20,30 @@ Risk Parity with Target Volatility 15% Strategy
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-import datetime
+
 
 def initialize(context):
     """初始化策略参数"""
-    # 设置基准
     set_benchmark('000300.XSHG')
     
-    # 设置手续费
-    set_commission(Commission(buy_tax=0.001, sell_tax=0.001, 
-                              min_commission=5))
+    set_order_cost(OrderCost(closed=10000, min_cost=5), type='stock')
+    set_slippage(0.002)
     
-    # 设置滑点
-    set_slippage( SlippageFixed(0.002) )
+    context.target_volatility = 0.15
+    context.lookback_period = 60
+    context.rebalance_period = 20
     
-    # 策略参数
-    context.target_volatility = 0.15  # 目标波动率15%
-    context.lookback_period = 60      # 回看窗口(交易日)
-    context.rebalance_period = 20     # 再平衡周期(交易日)
-    
-    # 资产配置
     context.assets = {
-        'stock_hs300': '000300.XSHG',  # 沪深300
-        'stock_zz500': '000905.XSHG',  # 中证500
-        'bond': 'H11001.XSHG',          # 国债指数
-        'gold': '518880.XSHG',          # 黄金ETF
-        'oil': '160416.XSHG',           # 原油基金
+        'stock_hs300': '000300.XSHG',
+        'stock_zz500': '000905.XSHG',
+        'bond': 'H11001.XSHG',
+        'gold': '518880.XSHG',
+        'oil': '160416.XSHG',
     }
     
-    # 初始权重(等权重)
     context.initial_weights = {k: 1.0/len(context.assets) for k in context.assets.keys()}
-    
-    # 交易日期计数器
     context.trade_day_counter = 0
     
-    # 记录日志
     log.info('策略初始化完成')
     log.info(f'目标波动率: {context.target_volatility*100:.1f}%')
     log.info(f'资产列表: {list(context.assets.values())}')
@@ -64,7 +53,6 @@ def handle_data(context, data):
     """每日交易逻辑"""
     context.trade_day_counter += 1
     
-    # 按照再平衡周期调仓
     if context.trade_day_counter % context.rebalance_period == 1 or context.trade_day_counter == 1:
         rebalance(context, data)
 
@@ -72,42 +60,31 @@ def handle_data(context, data):
 def rebalance(context, data):
     """执行调仓逻辑"""
     try:
-        # 获取历史数据计算风险指标
         prices = get_history_data(context, data)
         if prices is None or len(prices) < context.lookback_period:
             return
         
-        # 计算收益率
         returns = calculate_returns(prices)
-        
-        # 计算协方差矩阵
         cov_matrix = calculate_covariance(returns, context.lookback_period)
         
-        # 计算风险平价权重
-        risk_parity_weights = calculate_risk_parity_weights(cov_matrix)
+        asset_keys = list(context.assets.keys())
+        risk_parity_weights = calculate_risk_parity_weights(cov_matrix, asset_keys)
         
-        # 计算当前组合波动率
         current_volatility = calculate_portfolio_volatility(risk_parity_weights, cov_matrix)
         
-        # 计算目标波动率调整系数
         if current_volatility > 0:
             vol_adjustment = context.target_volatility / current_volatility
-            vol_adjustment = min(max(vol_adjustment, 0.5), 2.0)  # 限制调整范围
+            vol_adjustment = min(max(vol_adjustment, 0.5), 2.0)
         else:
             vol_adjustment = 1.0
         
-        # 最终权重 = 风险平价权重 * 波动率调整系数
         final_weights = {k: v * vol_adjustment for k, v in risk_parity_weights.items()}
         
-        # 归一化权重
         total_weight = sum(final_weights.values())
         if total_weight > 0:
             final_weights = {k: v/total_weight for k, v in final_weights.items()}
         
-        # 执行交易
         execute_trades(context, data, final_weights)
-        
-        # 记录日志
         log_trades(context, final_weights, current_volatility, vol_adjustment)
         
     except Exception as e:
@@ -117,16 +94,16 @@ def rebalance(context, data):
 def get_history_data(context, data):
     """获取历史价格数据"""
     symbols = list(context.assets.values())
-    
-    # 获取历史收盘价
-    prices_dict = history(context.lookback_period + 1, 'close', symbols, skip_paused=True)
+    prices_dict = history(context.lookback_period + 1, 'close', symbols)
     
     if prices_dict is None or len(prices_dict) == 0:
         return None
     
-    # 转换为DataFrame
     prices = pd.DataFrame(prices_dict)
-    prices = prices.dropna()
+    prices = prices.dropna(axis=1, how='any')
+    
+    if len(prices) < context.lookback_period:
+        return None
     
     return prices
 
@@ -139,18 +116,14 @@ def calculate_returns(prices):
 
 def calculate_covariance(returns, lookback):
     """计算协方差矩阵"""
-    # 使用历史收益率计算协方差
     cov = returns.iloc[-lookback:].cov()
     return cov
 
 
-def calculate_risk_parity_weights(cov_matrix):
+def calculate_risk_parity_weights(cov_matrix, asset_keys):
     """
     计算风险平价权重
-    风险平价的核心思想: 每个资产对组合总风险的贡献相等
-    
-    风险贡献 = 权重 * 边际风险贡献
-    边际风险贡献 = 协方差矩阵 * 权重向量
+    核心思想: 每个资产对组合总风险的贡献相等
     """
     n_assets = len(cov_matrix)
     
@@ -167,21 +140,12 @@ def calculate_risk_parity_weights(cov_matrix):
         actual_risks = risk_contribution(weights, cov)
         return np.sum((actual_risks - target_risk) ** 2)
     
-    # 初始权重
     w0 = np.array([1.0/n_assets] * n_assets)
-    
-    # 协方差矩阵
     cov_array = cov_matrix.values
     
-    # 优化约束条件
-    constraints = [
-        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}  # 权重和为1
-    ]
+    constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+    bounds = [(0.0, 0.4) for _ in range(n_assets)]
     
-    # 边界条件
-    bounds = [(0.0, 0.4) for _ in range(n_assets)]  # 单个资产权重不超过40%
-    
-    # 优化
     result = minimize(
         risk_parity_objective,
         w0,
@@ -197,9 +161,7 @@ def calculate_risk_parity_weights(cov_matrix):
     else:
         weights = w0
     
-    # 转换为字典
-    weight_dict = {k: weights[i] for i, k in enumerate(context.assets.keys())}
-    
+    weight_dict = {k: weights[i] for i, k in enumerate(asset_keys)}
     return weight_dict
 
 
@@ -207,7 +169,6 @@ def calculate_portfolio_volatility(weights, cov_matrix):
     """计算组合波动率"""
     weight_array = np.array(list(weights.values()))
     cov_array = cov_matrix.values
-    
     portfolio_vol = np.sqrt(np.dot(weight_array.T, np.dot(cov_array, weight_array)))
     return portfolio_vol
 
@@ -219,11 +180,8 @@ def execute_trades(context, data, target_weights):
     for asset_name, symbol in context.assets.items():
         target_weight = target_weights.get(asset_name, 0)
         current_value = context.portfolio.portfolio_value
-        
-        # 计算目标市值
         target_value = current_value * target_weight
         
-        # 获取当前持仓
         if symbol in current_positions:
             current_amount = current_positions[symbol].amount
             current_price = data.current(symbol, 'close')
@@ -236,25 +194,12 @@ def execute_trades(context, data, target_weights):
             current_amount = 0
             current_value_holding = 0
         
-        # 计算需要交易的金额
         value_diff = target_value - current_value_holding
-        
-        # 设置最小交易阈值(避免小额交易)
         min_trade_value = current_value * 0.01
         
-        # 买入
-        if value_diff > min_trade_value:
-            amount_to_buy = int(value_diff / (data.current(symbol, 'close') * 1.001))
-            if amount_to_buy > 0:
-                order_target(symbol, amount_to_buy, MarketOpenBuyStyle())
-                log.info(f'买入 {symbol}: {amount_to_buy}股, 目标权重 {target_weight:.2%}')
-        
-        # 卖出
-        elif value_diff < -min_trade_value:
-            amount_to_sell = current_amount
-            if amount_to_sell > 0:
-                order_target(symbol, amount_to_sell, MarketOpenSellStyle())
-                log.info(f'卖出 {symbol}: {amount_to_sell}股, 目标权重 {target_weight:.2%}')
+        if abs(value_diff) > min_trade_value:
+            order_target_value(symbol, target_value)
+            log.info(f'{symbol}: 目标市值 {target_value:.2f}, 目标权重 {target_weight:.2%}')
 
 
 def log_trades(context, weights, volatility, adjustment):
@@ -270,18 +215,3 @@ def log_trades(context, weights, volatility, adjustment):
     for asset_name, weight in weights.items():
         symbol = context.assets[asset_name]
         log.info(f'  {asset_name} ({symbol}): {weight:.2%}')
-
-
-def before_trading_start(context, data):
-    """每日开盘前执行"""
-    pass
-
-
-def after_trading_end(context, data):
-    """每日收盘后执行"""
-    pass
-
-
-# 聚宽平台特定配置
-# g.t = text version for JoinQuant
-g = globals()
