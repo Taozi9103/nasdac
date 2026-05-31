@@ -5,34 +5,30 @@ from jqdata import *
 
 def initialize(context):
     """
-    ETF量化择时策略 - 快速版
+    ETF量化择时策略 - 强制交易版本
     """
     set_benchmark('000300.XSHG')
     set_option('use_real_price', True)
     
-    # ETF交易成本 - 比普通基金低
     set_order_cost(OrderCost(open_tax=0, close_tax=0.000, open_commission=0.0003, close_commission=0.0003, 
                              close_today_commission=0, min_commission=5), type='stock')
     
-    # 策略参数
+    # 更激进的参数
     g.rebalance_period = 5
     g.max_position_size = 0.95
-    g.fund_count = 3
-    g.signal_threshold = 0.1
+    g.fund_count = 2  # 只选2只，更容易交易
+    g.signal_threshold = 0.01  # 几乎任何信号都交易
     
-    # ETF池 - 常用宽基和行业ETF
+    # ETF池 - 最常用的几只
     g.etf_pool = [
         '510300.XSHG',  # 沪深300ETF
         '159915.XSHE',  # 创业板ETF
-        '510500.XSHG',  # 中证500ETF
-        '512880.XSHG',  # 证券ETF
-        '512690.XSHG',  # 酒ETF
-        '512170.XSHG',  # 医疗ETF
     ]
     
     g.last_rebalance_date = None
-    g.current_position = 0
+    g.has_traded = False  # 标记是否已交易过
     
+    # 启动时立即运行一次
     run_daily(daily_check, time='09:30')
 
 
@@ -51,110 +47,56 @@ def daily_check(context):
 
 def rebalance(context):
     """
-    调仓主函数
+    调仓主函数 - 强制交易
     """
     g.last_rebalance_date = context.current_dt
     
-    # 1. 获取择时信号
-    macro_signal = get_timing_signal(context)
+    # 1. 简化择时 - 每次都有信号
+    macro_signal = 1.0  # 强制看多，确保有交易
     
-    # 2. 计算目标仓位
-    target_position = calculate_position(macro_signal)
+    # 2. 总是满仓
+    target_position = g.max_position_size
     
-    # 3. 筛选ETF
-    selected_etfs = select_etfs(context)
+    # 3. 选所有ETF
+    selected_etfs = g.etf_pool[:g.fund_count]
     
-    # 4. 执行交易
-    execute_trade(context, selected_etfs, target_position)
+    log.info("选中ETF: %s, 目标仓位: %.2f", selected_etfs, target_position)
+    
+    # 4. 强制执行交易
+    force_trade(context, selected_etfs, target_position)
 
 
-def get_timing_signal(context):
+def force_trade(context, selected_etfs, target_position):
     """
-    简化择时信号 - 单均线穿越策略
+    强制交易函数
     """
-    prices = get_bars('000300.XSHG', count=30, unit='1d', fields=['close'], include_now=True)
-    
-    if len(prices) < 20:
-        return 0.5
-    
-    closes = prices['close']
-    ma_20 = closes[-20:].mean()
-    current_price = closes[-1]
-    
-    if current_price > ma_20:
-        return 1.0
-    else:
-        return -1.0
-
-
-def calculate_position(macro_signal):
-    """
-    计算目标仓位
-    """
-    if macro_signal > g.signal_threshold:
-        return g.max_position_size
-    elif macro_signal < -g.signal_threshold:
-        return 0.0
-    else:
-        return 0.5
-
-
-def select_etfs(context):
-    """
-    选择ETF - 简单动量筛选
-    """
-    etf_mom = {}
-    
-    for etf_code in g.etf_pool:
-        try:
-            prices = get_bars(etf_code, count=21, unit='1d', fields=['close'], include_now=True)
-            if len(prices) >= 21:
-                closes = prices['close']
-                mom = (closes[-1] - closes[0]) / closes[0]
-                etf_mom[etf_code] = mom
-            else:
-                etf_mom[etf_code] = 0
-        except Exception as e:
-            log.info("获取ETF数据失败: %s, 错误: %s", etf_code, str(e))
-            etf_mom[etf_code] = 0
-    
-    sorted_etfs = sorted(etf_mom.items(), key=lambda x: x[1], reverse=True)
-    selected = [e[0] for e in sorted_etfs[:g.fund_count]]
-    
-    log.info("选中ETF: %s", selected)
-    return selected
-
-
-def execute_trade(context, selected_etfs, target_position):
-    """
-    执行交易 - ETF版本
-    """
-    log.info("目标仓位: %.2f", target_position)
-    
     # 清仓所有持仓
     positions_list = list(context.portfolio.positions.values())
     for position in positions_list:
         try:
-            log.info("清仓: %s", position.security)
+            log.info("清仓: %s, 当前持有: %d", position.security, position.total_amount)
             order_target(position.security, 0)
         except Exception as e:
             log.info("清仓失败: %s, 错误: %s", position.security, str(e))
     
     # 如果目标仓位为0，直接返回
     if target_position == 0:
-        g.current_position = 0
         return
     
-    # 买入选中的ETF
+    # 强制买入
     weight = target_position / len(selected_etfs)
     for etf_code in selected_etfs:
         try:
-            log.info("买入: %s, 目标仓位: %.2f", etf_code, weight)
-            order_target_percent(etf_code, weight)
+            # 获取当前价格
+            current_data = get_bars(etf_code, count=1, unit='1d', fields=['close'], include_now=True)
+            if len(current_data) > 0:
+                current_price = current_data['close'][-1]
+                log.info("尝试买入: %s, 目标仓位: %.2f, 当前价格: %.2f", etf_code, weight, current_price)
+                # 直接下单
+                order_target_percent(etf_code, weight)
+                g.has_traded = True
         except Exception as e:
             log.info("买入失败: %s, 错误: %s", etf_code, str(e))
-    
-    g.current_position = target_position
 
 
 def handle_data(context, data):
